@@ -5,8 +5,7 @@ from ttkbootstrap.constants import *
 import customtkinter
 
 # Reconhecimento e transcrição de textos manuscritos
-from kraken import binarization, pageseg, rpred
-from kraken.lib import models
+from OCR.pylaia_engine import PyLaiaEngine
 
 # Importação e leitura de imagens
 from PIL import Image, ImageTk
@@ -18,6 +17,8 @@ import pandas as pd
 import os
 import subprocess
 
+# ---------------------------------------------------
+
 # Caminho do dataframe
 dfCSV = "ModeloML\dfnovo.csv"
 
@@ -26,37 +27,15 @@ if not os.path.exists(dfCSV):
     pd.DataFrame(
         columns=["matricula", "img_path", "texto_corrigido", "ocr_text"]
     ).to_csv(dfCSV, index=False, sep=";", encoding="utf-8")
+# ---------------------------------------------------
+model_path = os.path.join("ModeloML", "modelos", "pylaia", "modelo.pth")
 
-
-# Função para processar imagem com Kraken OCR
-def process_imagem(img_path, model_path="modelo_matriculas.mlmodel"):
-    imagem = Image.open(img_path)  # Abre a imagem
-
-    f = 3  # Factor de redimensionamento
-    im = imagem.resize(
-        (imagem.width * f, imagem.height * f), Image.LANCZOS
-    )  # Redimensiona a imagem aumentando em 3x
-
-    # Renomeação do caminho da imagem e da extensão
-    pasta_saida = "ModeloML/img_processadas"
-    os.makedirs(pasta_saida, exist_ok=True)  # Cria uma pasta se não existir ainda
-    nome_base = os.path.splitext(os.path.basename(img_path))[0]  # Separa o nome da extensão (nome.png --> (nome, .png))
-    new_path = os.path.join(pasta_saida, f"{nome_base}.png")  # novo caminho da imagem
-
-    im.save(new_path, dpi=(300, 300))  # Salva com metadado de 300 dpi
-    img_cinza = im.convert("L")  # Coloca imagem em tons de cinza
-
-    im_bin = binarization.nlbin(img_cinza)  # Binariza a imagem
-    seg_linha = pageseg.segment(im_bin)  # Faz a segmentação de linhas
-    ocr_model = rpred.load_any(model_path)  # Carrega o modelo OCR
-    pred = rpred.rpred(ocr_model, im_bin, seg_linha)  # Faz a predição
-
-    texto = "\n".join([line.prediction for line in pred])
-    return texto
+OCR = PyLaiaEngine(model_path)
 
 
 # Função para salvar a correção no dataframe
 def save_correcao(matricula, img_path, txt_ocr_path, txt_corrigido_path):
+    # Lê, adiciona e atualiza
     df = pd.read_csv(dfCSV, sep=";", encoding="utf-8")
     df = pd.concat(
         [
@@ -77,20 +56,21 @@ def save_correcao(matricula, img_path, txt_ocr_path, txt_corrigido_path):
     df.to_csv(dfCSV, sep=";", encoding="utf-8", index=False)  # Atualizar dataframe
     messagebox.showinfo("Feedback", "Correção salva no dataframe!")
 
-    import pandas as pd
-
-
-def treinar():
-    subprocess.Popen(["bash", "ModeloML\script-treino.sh"])
-
 
 # Interface
 def app_manuscritIA():
     root = customtkinter.CTk()
-    customtkinter.set_default_color_theme("dark-blue")
-    root.title("ManuscritIA - Transcrição OCR de Manuscritos")
-    root.iconbitmap("logo_sistema.ico")
+    root.title("ManuscritIA - Transcrição Automática de Manuscritos")
+    root.iconbitmap("diversos\logo_sistema.ico")
     root.geometry("1200x600")  # Largura x Altura em pixels
+
+    # ---------------- DESIGN E ORGANIZAÇÃO LAYOUT ------------------------------
+
+    customtkinter.set_default_color_theme("dark-blue")
+
+    # Lugar da imagem com o canvas
+    canvas = tk.Canvas(root, bg="black")
+    canvas.grid(row=1, column=0, sticky="nsew")
 
     # Definição do grid da janela principal
     root.grid_rowconfigure(0, weight=0)
@@ -99,8 +79,6 @@ def app_manuscritIA():
     root.grid_rowconfigure(3, weight=0)
     root.grid_columnconfigure(0, weight=2)
     root.grid_columnconfigure(1, weight=2)
-
-    # ---------------- DESIGN E ORGANIZAÇÃO LAYOUT ------------------------------
 
     # Área da imagem------------------------
     img_label = customtkinter.CTkLabel(
@@ -113,7 +91,7 @@ def app_manuscritIA():
     )
     img_label.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
-    img_box = customtkinter.CTkLabel(root, text="")
+    img_box = customtkinter.CTkLabel(root)
     img_box.grid(row=1, column=0, sticky="nsew")
 
     # Área do texto-------------------------
@@ -131,10 +109,6 @@ def app_manuscritIA():
     scroll2 = tk.Scrollbar(root, command=text_box.yview)
     text_box.configure(yscrollcommand=scroll2.set)
     text_box.grid(column=1, row=1, sticky="nsew")
-
-    # Label Matrícula
-    # mat_label = customtkinter.CTkLabel(root, text="Matrícula", font=("Arial", 12, "bold"))
-    # mat_label.grid(row=2, column=1, sticky="nsew")
 
     # Campo Matrícula
     entry_matricula = customtkinter.CTkEntry(
@@ -163,9 +137,9 @@ def app_manuscritIA():
 
         if file_path:
             try:
-                texto = process_imagem(
-                    file_path
-                )  # Transcreve o texto da imagem e armazena na variável texto
+                # Transcreve o texto da imagem e armazena na variável texto e armazena as coordenadas do delimitador das palavras
+                texto, rects = OCR.process_image(file_path)
+
                 text_box.delete("1.0", tk.END)  # Apaga todo conteúdo da caixa de texto
                 text_box.insert(tk.END, texto)  # Adiciona o texto gerado pela OCR
                 img_path_var.set(file_path)  # Guarda o caminho da imagem selecionada
@@ -173,10 +147,45 @@ def app_manuscritIA():
 
                 # Exibe imagem com redimensionamento
                 im = Image.open(file_path)
-                im.thumbnail((1195, 1600))  # tamanho inicial
-                tk_img = ImageTk.PhotoImage(im)
-                img_box.config(image=tk_img)
-                img_box.image = tk_img
+                orig_w, orig_h = im.size  # Extrae o tamanho da imagem original
+
+                MAX_W, MAX_H = 1000, 1500
+                new_im = im.copy()
+                new_im.thumbnail((MAX_W, MAX_H))
+                new_w, new_h = new_im.size
+
+                # Redimensionar imagem
+                sclx = new_w / orig_w  # Escala x
+                scly = new_h / orig_h  # EScala y
+
+                tk_img = ImageTk.PhotoImage(new_im)
+
+                canvas.delete(
+                    "all"
+                )  # Limpar o canva para não ficar com sobreposição de imagens
+                canvas.image = tk_img
+                canvas.create_image(0, 0, anchor="nw", image=tk_img)
+
+                def click_box(idx):
+                    palavra = rects[idx]["texto"]
+                    # text_box.delete("1.0", tk.END)
+                    text_box.insert(tk.END, palavra)
+
+                for idx, rect in enumerate(rects):
+                    x = int(rect["x"] * sclx)
+                    y = int(rect["y"] * scly)
+                    w = int(rect["w"] * sclx)
+                    h = int(rect["h"] * scly)
+
+                    rectID = canvas.create_rectangle(
+                        x, y, x + w, y + h, outline="red", width=2
+                    )
+
+                    canvas.tag_bind(
+                        rectID,  # ID do retãngulo
+                        "<Button-1>",  # Botão esquerdo do mouse
+                        lambda e, i=idx: click_box(i),
+                    )  # Função a ser aplicada
 
                 messagebox.showinfo("Sucesso", "Upload realizado com sucesso!")
 
@@ -251,7 +260,9 @@ def app_manuscritIA():
         # Se o número de correções for múltiplo de 50, dispara treino
         if total_corrigidos % 50 == 0 and total_corrigidos > 0:
             messagebox.showwarning("Treinamento", "Executando treino automático...")
-            treinar()
+            subprocess.Popen(["python", "ModeloML/prepare_dataset.py"])
+            subprocess.Popen(["python", "ModeloML/treino_pylaia.py"])
+
         else:
             pass
 
